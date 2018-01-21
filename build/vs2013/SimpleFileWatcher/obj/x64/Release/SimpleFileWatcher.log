@@ -3,4 +3,4 @@
   FileWatcherOSX.cpp
   FileWatcherWin32.cpp
   Generating Code...
-  SimpleFileWatcher.vcxproj -> C:\Users\gazin\Programming\internal\git\music_visualizer\libs\SimpleFileWatcher\build\vs2013\SimpleFileWatcher\..\..\..\lib\Release\SimpleFileWatcher.lib
+  SimpleFileWatcher.vcxproj -> C:\Users\gazin\Programming\internal\music_visualizer\libs\SimpleFileWatcher\build\vs2013\SimpleFileWatcher\..\..\..\lib\Release\SimpleFileWatcher.lib
