@@ -4,3 +4,4 @@ buildcfg
 lib
 obj
 *.obj
+*.user
