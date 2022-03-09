@@ -32,6 +32,7 @@
 #include <stdio.h>
 #include <errno.h>
 #include <unistd.h>
+#include <dirent.h>
 #include <sys/inotify.h>
 
 #define BUFF_SIZE ((sizeof(struct inotify_event)+FILENAME_MAX)*1024)
@@ -41,7 +42,13 @@ namespace FW
 
 	struct WatchStruct
 	{
+		struct Child
+		{
+			WatchID id;
+			String path;
+		};
 		WatchID mWatchID;
+		std::vector<Child> _ids;
 		String mDirName;
 		FileWatchListener* mListener;		
 	};
@@ -49,6 +56,11 @@ namespace FW
 	//--------
 	FileWatcherLinux::FileWatcherLinux()
 	{
+#ifdef IN_NONBLOCK
+    	mFD = inotify_init1( IN_NONBLOCK );
+#else
+    	mFD = inotify_init();
+#endif
 		mFD = inotify_init();
 		if (mFD < 0)
 			fprintf (stderr, "Error: %s\n", strerror(errno));
@@ -71,6 +83,36 @@ namespace FW
 		mWatches.clear();
 	}
 
+	void recursive_add_watch(WatchStruct& watch, const String& dirname, int mFD, size_t initLen)
+	{
+		DIR* dir = opendir(dirname.c_str());
+		dirent* child;
+
+		String path = dirname;
+		
+		while(child = readdir(dir))
+		{
+			if (!strcmp(child->d_name, "."))
+				continue;
+
+			if (!strcmp(child->d_name, ".."))
+				continue;
+
+			// 4 == dir, 8 == file
+			if (child->d_type == 4)
+			{
+				auto cdir = (dirname + child->d_name) + "/";
+				watch._ids.push_back({
+					(WatchID)inotify_add_watch(mFD, cdir.c_str(), 
+						IN_CLOSE_WRITE | IN_MOVED_TO | IN_CREATE | IN_MOVED_FROM | IN_DELETE), cdir.substr(initLen)});
+				
+				recursive_add_watch(watch, cdir, mFD, initLen);
+			}
+		}
+
+		closedir(dir);
+	}
+
 	//--------
 	WatchID FileWatcherLinux::addWatch(const String& directory, FileWatchListener* watcher, bool recursive)
 	{
@@ -91,7 +133,14 @@ namespace FW
 		pWatch->mListener = watcher;
 		pWatch->mWatchID = wd;
 		pWatch->mDirName = directory;
-		
+		if (recursive)
+		{
+			auto path = directory;
+			if (path == "." || path[path.length() - 1] != '/')
+				path.append("/");
+			recursive_add_watch(*pWatch, path, mFD, path.length());
+		}
+
 		mWatches.insert(std::make_pair(wd, pWatch));
 	
 		return wd;
@@ -150,9 +199,32 @@ namespace FW
 			while (i < len)
 			{
 				struct inotify_event *pevent = (struct inotify_event *)&buff[i];
-
-				WatchStruct* watch = mWatches[pevent->wd];
-				handleAction(watch, pevent->name, pevent->mask);
+				
+				String root = "";
+				WatchStruct* watch = 0;
+				if (mWatches.count(pevent->wd) == 0)
+				{
+					for(auto& it : mWatches)
+					{
+						for(auto& id : it.second->_ids)
+						{
+							if (id.id == pevent->wd)
+							{
+								root = id.path;
+								watch = it.second;
+								break;
+							}
+						}
+						if (watch)
+							break;
+					}
+				}
+				else
+				{
+					watch = mWatches[pevent->wd];
+				}
+				
+				handleAction(watch, root + pevent->name, pevent->mask);
 				i += sizeof(struct inotify_event) + pevent->len;
 			}
 		}

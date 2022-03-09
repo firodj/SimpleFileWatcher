@@ -13,25 +13,22 @@ and inotify in linux. OSX is supported via kqueue and directory scans.
  * Optimize the kqueue implementation.
  * Thorough UnitTest
  * Add proper Unicode support.
+ * Test CMake on Mac and Linux
 
 
 ## Compiling
 
+### Premake
 Use premake5 to generate a project for your build system.
 
+### CMake
+Use add_subdirectory, add include directories and link against sfw_lib as appropriate.
 
 ## SimpleDemo
-
 To run the demo, create a directory relative to the execution directory
 called "test". Start SimpleDemo, then create/change/delete files inside
 "test". If "test" does not exist when SimpleDemo starts, it will throw
 an exception and exit.
-
-
-## OgreDemo
-
-Check the OgreDemo directory for an example integration with Ogre.
-
 
 ## Caveats
 

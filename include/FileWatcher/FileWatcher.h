@@ -35,6 +35,7 @@
 #include <thread>
 #include <mutex>
 #include <queue>
+#include <unordered_map>
 
 namespace FW
 {
@@ -100,7 +101,7 @@ namespace FW
 
 		///
 		///
-		virtual ~FileWatcher();
+		~FileWatcher();
 
 		/// Add a directory watch. Same as the other addWatch, but doesn't have recursive option.
 		/// For backwards compatibility.
@@ -126,97 +127,6 @@ namespace FW
 
 	};//end FileWatcher
 
-	enum cmd_type
-	{
-		AddWatch,
-		RemoveWatchStr,
-		RemoveWatchID
-	};
-
-	struct command_struct
-	{
-		String path;
-		union
-		{
-			struct
-			{
-				FileWatchListener* watcher;
-				bool recursive;
-				WatchID* target;
-			} Add;
-
-			struct
-			{
-				WatchID id;
-			} RemoveID;
-		};
-
-		cmd_type Type;
-	};
-
-	class BufferedFileWatcher
-	{
-	public:
-		BufferedFileWatcher();
-		virtual ~BufferedFileWatcher();
-
-	public:
-		/// Add a directory watch. Same as the other addWatch, but doesn't have recursive option.
-		/// For backwards compatibility.
-		/// @exception FileNotFoundException Thrown when the requested directory does not exist
-		void addWatch(const String& directory, FileWatchListener* watcher, WatchID* target = nullptr);
-
-		/// Add a directory watch
-		/// @exception FileNotFoundException Thrown when the requested directory does not exist
-		void addWatch(const String& directory, FileWatchListener* watcher, bool recursive, WatchID* target = nullptr);
-
-		/// Remove a directory watch. This is a brute force search O(nlogn).
-		void removeWatch(const String& directory);
-
-		/// Remove a directory watch. This is a map lookup O(logn).
-		void removeWatch(WatchID watchid);
-
-		/// Updates the watcher. Must be called often.
-		void update();
-
-	private:
-		FileWatcher m_watcher;
-		std::mutex m_mutex;
-		std::queue<command_struct> m_commands;
-	};
-
-	class AsyncFileWatcher
-	{
-		friend void async_filewatcher_thread(AsyncFileWatcher* args);
-	public:
-		AsyncFileWatcher();
-		virtual ~AsyncFileWatcher();
-
-	public:
-		/// Add a directory watch. Same as the other addWatch, but doesn't have recursive option.
-		/// For backwards compatibility.
-		/// @exception FileNotFoundException Thrown when the requested directory does not exist
-		void addWatch(const String& directory, FileWatchListener* watcher, WatchID* target = NULL);
-
-		/// Add a directory watch
-		/// @exception FileNotFoundException Thrown when the requested directory does not exist
-		void addWatch(const String& directory, FileWatchListener* watcher, bool recursive, WatchID* target = NULL);
-
-		/// Remove a directory watch. This is a brute force search O(nlogn).
-		void removeWatch(const String& directory);
-
-		/// Remove a directory watch. This is a map lookup O(logn).
-		void removeWatch(WatchID watchid);
-
-		/// Updates the watcher. Must be called often.
-		void update();
-
-	private:
-		BufferedFileWatcher m_watch;
-		std::thread m_thr;
-		bool m_running;
-	};
-
 	/// Basic interface for listening for file events.
 	/// @class FileWatchListener
 	class FileWatchListener
@@ -233,6 +143,183 @@ namespace FW
 		virtual void handleFileAction(WatchID watchid, const String& dir, const String& filename, Action action) = 0;
 
 	};//class FileWatchListener
+
+
+	struct FileWatcherEvent
+	{
+		WatchID id;
+		String dir;
+		String filename;
+		Actions::Action action;
+	};
+
+	class SingleThreadedPollingFileWatcher
+	{
+		class Listener : public FileWatchListener
+		{
+		public:
+			inline Listener(SingleThreadedPollingFileWatcher& watcher) : m_watcher(watcher) {}
+
+		public:
+			virtual void handleFileAction(WatchID watchid, const String& dir, const String& filename, Action action) override final;
+
+		private:
+			SingleThreadedPollingFileWatcher & m_watcher;
+		};
+
+		friend class SingleThreadedPollingFileWatcher::Listener;
+	public:
+		inline SingleThreadedPollingFileWatcher() :
+			m_listener(*this)
+		{
+		}
+
+		inline ~SingleThreadedPollingFileWatcher()
+		{
+		}
+
+	public:
+		inline WatchID addWatch(const String& path, bool recursive)
+		{
+			WatchID id = m_watcher.addWatch(path, &m_listener, recursive);
+			m_watches.insert({
+				path,
+				id
+				});
+			return id;
+		}
+
+		inline void removeWatch(const String& path)
+		{
+			if (m_watches.count(path) > 0)
+			{
+				auto ret = m_watches.at(path);
+				m_watches.erase(path);
+				m_watcher.removeWatch(ret);
+			}
+		}
+
+		inline void removeWatch(const WatchID& id)
+		{
+			for (auto it : m_watches)
+			{
+				if (it.second == id)
+				{
+					m_watches.erase(it.first);
+					m_watcher.removeWatch(id);
+					return;
+				}
+			}
+		}
+
+		inline void update() 
+		{
+			m_watcher.update();
+		}
+
+		inline bool poll(FileWatcherEvent& ev)
+		{
+			//m_watcher.update();
+			if (m_events.size() > 0)
+			{
+				ev = m_events.front();
+				m_events.pop();
+				return true;
+			}
+			return false;
+		}
+
+		inline bool get_events(std::queue<FileWatcherEvent>& dest)
+		{
+			if (m_events.size() > 0)
+			{
+				dest.swap(m_events);
+				return true;
+			}
+			return false;
+		}
+
+	private:
+		FileWatcher m_watcher;
+		Listener m_listener;
+		std::queue<FileWatcherEvent> m_events;
+		std::unordered_map<std::string, WatchID> m_watches;
+	};
+
+	class PollingFileWatcher
+	{
+		static void thread(PollingFileWatcher* watcher)
+		{
+			while (watcher->m_running)
+			{
+				{
+					std::lock_guard<std::mutex> lock(watcher->m_mutex);
+					watcher->m_watcher.update();
+				}
+				std::this_thread::sleep_for(std::chrono::milliseconds(watcher->m_updaterate));
+			}
+		}
+	public:
+		inline PollingFileWatcher() :
+			m_running(true), m_updaterate(50)
+		{
+			m_thread = std::thread(thread, this);
+		}
+
+		inline ~PollingFileWatcher()
+		{
+			m_running = false;
+			m_thread.join();
+		}
+
+	public:
+		inline WatchID addWatch(const String& path, bool recursive)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			return m_watcher.addWatch(path, recursive);
+		}
+
+		inline void removeWatch(const String& path)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_watcher.removeWatch(path);
+		}
+
+		inline void removeWatch(const WatchID& id)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			m_watcher.removeWatch(id);
+		}
+
+		inline void update()
+		{
+			// no-op
+		}
+
+		inline bool poll(FileWatcherEvent& ev)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			return m_watcher.poll(ev);
+		}
+
+		inline bool get_events(std::queue<FileWatcherEvent>& dest)
+		{
+			std::lock_guard<std::mutex> lock(m_mutex);
+			return m_watcher.get_events(dest);
+		}
+
+		inline void setThreadFrequency(int ms = 50)
+		{
+			m_updaterate = ms;
+		}
+
+	private:
+		bool m_running;
+		SingleThreadedPollingFileWatcher m_watcher;
+		std::mutex m_mutex;
+		std::thread m_thread;
+		int m_updaterate;
+	};
 
 };//namespace FW
 

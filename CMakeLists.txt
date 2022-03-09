@@ -1,21 +1,12 @@
-cmake_minimum_required(VERSION 3.3)
-project(lib)
+cmake_minimum_required(VERSION 3.2 FATAL_ERROR)
+set(SFW_INCLUDE_DIR ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
-set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -std=c++11 -D_REENTRANT -DLINUX")
+project(simplefilewatcher VERSION 1.0 LANGUAGES CXX)
+add_subdirectory("source")
 
-set(SOURCE_FILES
-    source/FileWatcher.cpp
-    source/FileWatcherLinux.cpp
-)
-
-include_directories(
-    .
-    include/
-)
-
-add_library(SimpleFileWatcher ${SOURCE_FILES})
-
-LINK_DIRECTORIES(/usr/lib/x86_64-linux-gnu/)
-
-# TARGET_LINK_LIBRARIES(main stdc++fs glfw GLEW GLU GL pulse-simple pulse pthread libs/ffts/libffts.a ${CMAKE_SOURCE_DIR}/libs/SimpleFileWatcher/lib/Debug/libSimpleFileWatcher.a)
-
+option(SFW_WITH_TEST "Build with demo app" off)
+if (SFW_WITH_TEST)
+    add_executable(sfw_test "SimpleDemo.cpp")
+    target_link_libraries(sfw_test PUBLIC sfw_lib)
+    target_include_directories(sfw_test ${SFW_INCLUDE_DIR})
+endif()
