@@ -5,3 +5,9 @@ lib
 obj
 *.obj
 *.user
+
+build
+!build/ALL_BUILD.vcxproj
+!build/SimpleFileWatcher.vcxproj
+!build/ZERO_CHECK.vcxproj
+!build/lib.sln
