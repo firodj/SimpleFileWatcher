@@ -11,3 +11,4 @@ build
 !build/SimpleFileWatcher.vcxproj
 !build/ZERO_CHECK.vcxproj
 !build/lib.sln
+!build/vs2013/SimpleFileWatcher/SimpleFileWatcher.vcxproj
