@@ -85,6 +85,8 @@ namespace FW
 			/// Sent when a file is modified
 			Modified = 4
 		};
+
+		String ToString(Action a);
 	};
 	typedef Actions::Action Action;
 

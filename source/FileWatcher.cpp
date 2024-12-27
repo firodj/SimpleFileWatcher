@@ -36,6 +36,16 @@
 
 namespace FW
 {
+	namespace Actions {
+		String ToString(Action a) {
+			switch (a) {
+				case Add: return "Add";
+				case Delete: return "Delete";
+				case Modified: return "Modified";
+			};
+			return "";
+		}
+	}
 
 	//--------
 	FileWatcher::FileWatcher()
@@ -124,7 +134,7 @@ namespace FW
 		command_struct str;
 		str.Type = RemoveWatchStr;
 		str.path = directory;
-		
+
 		std::lock_guard<std::mutex> lock(m_mutex);
 		m_commands.push(str);
 	}
@@ -134,7 +144,7 @@ namespace FW
 		command_struct str;
 		str.Type = RemoveWatchID;
 		str.RemoveID.id = watchid;
-		
+
 		std::lock_guard<std::mutex> lock(m_mutex);
 		m_commands.push(str);
 	}
