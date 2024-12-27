@@ -29,6 +29,7 @@
 #include <memory>
 #include <vector>
 #include <algorithm>
+#include <set>
 #include <sys/event.h>
 #include <sys/time.h>
 #include <sys/stat.h>
@@ -59,6 +60,7 @@ char *flagstring(int flags)
 namespace FW
 {
 	typedef struct kevent KEvent;
+	typedef std::map<String, uint32_t> NotifyMap;
 
 	struct EntryStruct
 	{
@@ -134,14 +136,15 @@ namespace FW
 			//tempEntry.mFilename = 0;
 
 			// delete
+			const String deletedName = name;
+
 			close(keit->ident);
 			mEntryList.erase(name);
-			//delete((EntryStruct*)keit->udata);
 			mChangeList.erase(keit);
 
 			// handle action
 			if(imitEvents)
-				handleAction(name, Actions::Delete);
+				handleAction(deletedName, Actions::Delete);
 		}
 
 		// called when the directory is actually changed
@@ -157,57 +160,40 @@ namespace FW
 				return;
 
 			struct dirent* dentry;
-			KEvent* ke = &mChangeList[1];
-			EntryStruct* entry = 0;
-			struct stat attrib;
+			std::set<String> fileExist;
 
 			while((dentry = readdir(dir)) != NULL)
 			{
+				struct stat attrib;
+
 				String fname = mDirName + "/" + dentry->d_name;
 				stat(fname.c_str(), &attrib);
 				if(!S_ISREG(attrib.st_mode))
 					continue;
-#if 0
-				if(ke <= &mChangeList[mChangeListCount])
-				{
-					entry = (EntryStruct*)ke->udata;
-					int result = strcmp(entry->mFilename, fname.c_str());
-					//fprintf(stderr, "[%s cmp %s]\n", entry->mFilename, fname.c_str());
-					if(result == 0)
-					{
-						stat(entry->mFilename, &attrib);
-						time_t timestamp = attrib.st_mtime;
-
-						if(entry->mModifiedTime != timestamp)
-						{
-							entry->mModifiedTime = timestamp;
-							handleAction(entry->mFilename, Actions::Modified);
-						}
-						ke++;
-					}
-					else if(result < 0)
-					{
-						// f1 was deleted
-						removeFile(entry->mFilename);
-						ke++;
-					}
-					else
-					{
-						// f2 was created
-						addFile(fname);
-						ke++;
-					}
-				}
-				else
-				{
-					// just add
-					addFile(fname);
-					ke++;
-				}
-#endif
+				fileExist.emplace(fname);
 			}//end while
 
 			closedir(dir);
+
+			// check deletedFiles
+			for (auto itEntry = mEntryList.begin(); itEntry != mEntryList.end(); ) {
+				if (fileExist.find(itEntry->first) == fileExist.end()) {
+					EntryStruct* entry = itEntry->second.get();
+					itEntry++;
+
+					removeFile(entry->mFilename);
+					continue;
+				}
+				++itEntry;
+			}
+
+			// check newFiles
+			for (auto &itExist : fileExist) {
+				if (mEntryList.find(itExist) == mEntryList.end()) {
+					//fprintf(stderr, "File added: %s\n", itExist.c_str());
+					addFile(itExist);
+				}
+			}
 		};
 
 		void handleAction(const String& filename, FW::Action action)
@@ -252,21 +238,15 @@ namespace FW
 
 		void removeAll()
 		{
-			//KEvent* ke = NULL;
-
 			// go through list removing each file and sending an event
 			for(auto it = mChangeList.begin(); it != mChangeList.end(); ++it)
 			{
-				//ke = &mChangeList[i];
-				//handleAction(name, Action::Delete);
 				EntryStruct* entry = (EntryStruct*)it->udata;
 
 				handleAction(entry->mFilename, Actions::Delete);
 
-				// delete
 				close(it->ident);
 				mEntryList.erase(entry->mFilename);
-				//delete((EntryStruct*)it->udata);
 			}
 
 			mChangeList.clear();
@@ -284,70 +264,75 @@ namespace FW
 		{
 			WatchStruct* watch = iter->second;
 
+			bool needRescan = false;
+			NotifyMap notifyMap;
+
 			while((nev = kevent(mDescriptor, &watch->mChangeList[0], watch->mChangeList.size(), &event, 1, &mTimeOut)) != 0)
 			{
 				if(nev == -1)
 					perror("kevent");
 				else if ( nev > 0 )
 				{
-					fprintf(stderr, "FFlags: %s, Data: 0x%lx\n", flagstring(event.fflags), event.data);
+					//fprintf(stderr, "FFlags: %s, Data: 0x%lx\n", flagstring(event.fflags), (uintptr_t)event.udata);
 
 					EntryStruct* entry = 0;
 					if((entry = (EntryStruct*)event.udata) != 0)
 					{
-
 						// the watchID of the entry doesn't match the watchID of the WatchStruct.
 						// instead, find it in the map and return it here.
-						watch = mWatches[ entry->mWatchID ];
-						if ( !watch )
-						{
-							//fprintf( stderr, "Unable to find watchID: %u\n", (unsigned int)entry->mWatchID );
+						auto itWatch = mWatches.find(entry->mWatchID);
+						if (itWatch == mWatches.end()) {
+							fprintf( stderr, "Unable to find watchID: %u\n", (unsigned int)entry->mWatchID );
 							continue;
-						}
+						} else
+							watch = itWatch->second;
 
 						if ( event.filter == EVFILT_VNODE )
 						{
-							fprintf(stderr, "\tWatch: %u, File: %s, FFlags: %s", (unsigned int)watch->mWatchID, entry->mFilename.c_str(), flagstring(event.fflags));
-#if 0
-							if(event.fflags & NOTE_DELETE)
-							{
-								fprintf(stderr, "File deleted\n");
-								#if 0
-								//watch->handleAction(entry->mFilename, FW::Actions::Delete);
-								//watch->removeFile(entry->mFilename);
-								watch->rescan();
-								#endif
-							}
-							if(event.fflags & NOTE_EXTEND ||
-							   event.fflags & NOTE_WRITE ||
-							   event.fflags & NOTE_ATTRIB)
-							{
-								fprintf(stderr, "File modified\n");
-								#if 0
-								//watch->rescan();
-								struct stat attrib;
-								stat(entry->mFilename, &attrib);
-								entry->mModifiedTime = attrib.st_mtime;
-								watch->handleAction(entry->mFilename, FW::Actions::Modified);
-								#endif
-							}
-#endif
+							//fprintf(stderr, "\tWatch: %u, File: %s, FFlags: %s\n", (unsigned int)watch->mWatchID, entry->mFilename.c_str(), flagstring(event.fflags));
 
+							if(event.fflags & NOTE_RENAME ||
+							   event.fflags & NOTE_DELETE) {
+								needRescan = true;
+							} else {
+								notifyMap[ entry->mFilename ] |= event.fflags;
+							}
 						}
-
 					}
 					else
 					{
-						fprintf(stderr, "Dir: %s -- rescanning\n", watch->mDirName.c_str());
-						#if 0
-						watch->rescan();
-						#endif
+						needRescan = true;
 					}
 				}
 
+				// Reset timeout
 				mTimeOut.tv_sec = 0;
 				mTimeOut.tv_nsec = 0;
 			}
+
+			if (needRescan) {
+				fprintf(stderr, "Dir: %s -- rescanning\n", watch->mDirName.c_str());
+				watch->rescan();
+			}
+
+			// check notify
+			for (auto &itNotify : notifyMap) {
+				auto itEntry = watch->mEntryList.find(itNotify.first);
+				//fprintf(stderr, "Change: %s, FFlags: %s, found=%d\n", itNotify.first.c_str(), flagstring(itNotify.second), itEntry != watch->mEntryList.end());
+				if (itEntry != watch->mEntryList.end()) {
+					EntryStruct* entry = itEntry->second.get();
+					struct stat attrib; // = fileExist[itNotify.first];
+					stat(entry->mFilename.c_str(), &attrib);
+
+					time_t timestamp = attrib.st_mtime;
+					if(entry->mModifiedTime != timestamp)
+					{
+						entry->mModifiedTime = timestamp;
+						watch->handleAction(entry->mFilename, Actions::Modified);
+					}
+				}
+			}
+
 		}
 	}
 
