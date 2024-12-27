@@ -5,6 +5,7 @@ lib
 obj
 *.obj
 *.user
+.vscode
 
 build
 !build/ALL_BUILD.vcxproj
